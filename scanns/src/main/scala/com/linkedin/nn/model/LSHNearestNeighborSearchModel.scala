@@ -52,7 +52,11 @@ abstract class LSHNearestNeighborSearchModel[T <: LSHNearestNeighborSearchModel[
     *                         [[Set]] of attributes
     * @param numNearestNeighbors Maximum number of candidates required for each item
     */
-  private[model] class NearestNeighborIterator(bucketsIt: Iterator[Array[mutable.ArrayBuffer[ItemId]]],
+   
+   
+   
+  // 原来的类
+  /*private[model] class NearestNeighborIterator(bucketsIt: Iterator[Array[mutable.ArrayBuffer[ItemId]]],
                                 itemVectors: mutable.Map[ItemId, Vector],
                                 numNearestNeighbors: Int) extends Iterator[(ItemId, Iterator[ItemIdDistancePair])]
     with Serializable {
@@ -72,7 +76,8 @@ abstract class LSHNearestNeighborSearchModel[T <: LSHNearestNeighborSearchModel[
         currentTuple match {
           case Some(x) =>
             while (currentIndex < x(0).size && !done) {
-              val queue = new TopNQueue(numNearestNeighbors)
+              val queue = 
+              TopNQueue(numNearestNeighbors)
               x(1).filter(_ != x(0)(currentIndex))
                 .map(c => (c, distance.compute(itemVectors(c), itemVectors(x(0)(currentIndex)))))
                 .foreach(queue.enqueue(_))
@@ -106,8 +111,78 @@ abstract class LSHNearestNeighborSearchModel[T <: LSHNearestNeighborSearchModel[
       }
       null
     }
-  }
+  }*/
+  
+  private[model] class NearestNeighborIterator(buckets: IndexedSeq[Array[mutable.ArrayBuffer[ItemId]]],
+                                itemVectors: mutable.Map[ItemId, Vector],
+                                numNearestNeighbors: Int) extends Iterator[(ItemId, IndexedSeq[ItemIdDistancePair])]
+    with Serializable {
 
+    private val bucketsSize = buckets.size
+    private var bucketsIndex = 0
+
+    // this will be the next element that the iterator returns on a call to next()
+    private var nextResult: Option[(ItemId, IndexedSeq[ItemIdDistancePair])] = None
+
+    // this is the current tuple in the bucketsIt iterator that is being scanned
+    private var currentTuple = if (hasNextBucket()) Some(nextBucket()) else None
+
+    // this is the index in the first array of currentTuple which is being scanned
+    private var currentIndex = 0
+
+    private def hasNextBucket(): Boolean ={
+      bucketsIndex < bucketsSize
+    }
+
+    private def nextBucket(): Array[mutable.ArrayBuffer[ItemId]]={
+      val result = buckets(bucketsIndex)
+      bucketsIndex += 1
+      result
+    }
+
+    private def populateNext(): Unit = {
+      var done = false
+      while (currentTuple.isDefined && !done) {
+        currentTuple match {
+          case Some(x) =>
+            while (currentIndex < x(0).size && !done) {
+              val queue = new TopNQueue(numNearestNeighbors)
+              val currentId = x(0)(currentIndex)
+              x(1).filter(_ != currentId)
+                .map(c => (c, distance.compute(itemVectors(c), itemVectors(currentId))))
+                .foreach(queue.enqueue(_))
+              if (queue.nonEmpty()) {
+                nextResult = Some((currentId, queue.values()))
+                //nextResult = Some((x(0)(currentIndex), queue.iterator()))
+                done = true
+              }
+              currentIndex += 1
+            }
+            if (currentIndex == x(0).size) {
+              currentIndex = 0
+              currentTuple = if (hasNextBucket()) Some(nextBucket()) else None
+            }
+          case _ =>
+        }
+      }
+      if (currentTuple.isEmpty && !done) {
+        nextResult = None
+      }
+    }
+
+    populateNext()
+
+    override def hasNext: Boolean = nextResult.isDefined
+
+    override def next(): (ItemId, IndexedSeq[ItemIdDistancePair]) = {
+      if (hasNext) {
+        val ret = nextResult.get
+        populateNext()
+        return (ret._1, ret._2)
+      }
+      null
+    }
+  }
   /**
     * Firstly, note that this hash has nothing to do with the hashes of locality sensitive hashing. Think of this more
     * in the flavor of the feature hashing "trick". See https://en.wikipedia.org/wiki/Feature_hashing
@@ -281,7 +356,7 @@ abstract class LSHNearestNeighborSearchModel[T <: LSHNearestNeighborSearchModel[
 
           // TODO Start using loggers to log useful info
           // logStats(TaskContext.getPartitionId(), itemVectors, hashBuckets)
-          new NearestNeighborIterator(hashBuckets.valuesIterator, itemVectors, k)
+          new NearestNeighborIterator(hashBuckets.values.toIndexedSeq, itemVectors, k)
         }
       }
       .groupByKey()
